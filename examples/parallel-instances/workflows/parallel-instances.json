@@ -1,0 +1,22 @@
+{
+  "name": "example_parallel_instances",
+  "version": 1,
+  "entry_consumer": "tasks-consumer",
+  "consumers": [
+    {
+      "name": "tasks-consumer",
+      "topic": "ex-parallel-tasks",
+      "params": { "session.timeout.ms": 10000 },
+      "instances": 3
+    }
+  ],
+  "producers": [],
+  "jobs": [
+    {
+      "name": "process_task",
+      "handler": "process_task_handler",
+      "consumer": "tasks-consumer",
+      "producer": null
+    }
+  ]
+}

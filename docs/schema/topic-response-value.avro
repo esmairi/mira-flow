@@ -1,0 +1,7 @@
+{
+  "type": "record",
+  "name": "TopicResponseValue",
+  "fields": [
+    { "name": "n", "type": "int" }
+  ]
+}

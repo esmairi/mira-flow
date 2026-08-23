@@ -1,0 +1,26 @@
+{
+  "name": "example_linear_pipeline",
+  "version": 1,
+  "entry_consumer": "raw-consumer",
+  "consumers": [
+    { "name": "raw-consumer", "topic": "ex-linear-raw" },
+    { "name": "processed-consumer", "topic": "ex-linear-processed" }
+  ],
+  "producers": [
+    { "name": "processed-producer", "topic": "ex-linear-processed" }
+  ],
+  "jobs": [
+    {
+      "name": "ingest",
+      "handler": "linear_ingest_handler",
+      "consumer": "raw-consumer",
+      "producer": "processed-producer"
+    },
+    {
+      "name": "transform",
+      "handler": "linear_transform_handler",
+      "consumer": "processed-consumer",
+      "producer": null
+    }
+  ]
+}

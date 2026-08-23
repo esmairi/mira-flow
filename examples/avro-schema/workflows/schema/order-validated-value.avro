@@ -1,0 +1,9 @@
+{
+  "type": "record",
+  "name": "OrderValidated",
+  "fields": [
+    { "name": "order_id", "type": "string" },
+    { "name": "amount", "type": "double" },
+    { "name": "validated", "type": "boolean" }
+  ]
+}

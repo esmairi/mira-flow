@@ -1,0 +1,8 @@
+{
+  "type": "record",
+  "name": "TopicCommandValue",
+  "fields": [
+    { "name": "text", "type": "string" },
+    { "name": "params", "type": { "type": "map", "values": "string" } }
+  ]
+}

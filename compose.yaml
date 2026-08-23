@@ -1,0 +1,187 @@
+# Shared by every prod-image service (migrate/worker and their -postgres
+# variants below) so the build config only needs to change in one place.
+x-prod-build: &prod-build
+  context: .
+  target: prod
+
+# Same image/stage, but with the postgres driver actually installed (see
+# Dockerfile's DB_EXTRA build arg) — a distinct build from *prod-build's,
+# not just a runtime config difference, so `migrate`/`worker` stay driver-free.
+x-prod-build-postgres: &prod-build-postgres
+  context: .
+  target: prod
+  args:
+    DB_EXTRA: postgres
+
+services:
+  kafka:
+    image: apache/kafka:3.8.0
+    hostname: kafka
+    container_name: mira-flow-kafka
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      # PLAINTEXT: container-to-container (kafka-ui, this compose network).
+      # PLAINTEXT_HOST: host access, e.g. `uv run mira-flow run`.
+      KAFKA_LISTENERS: PLAINTEXT://kafka:19092,CONTROLLER://kafka:19093,PLAINTEXT_HOST://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:19092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:19093
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      # Single broker: idempotent producers (mira-flow's default) otherwise
+      # stall ~30s per fresh producer waiting on __transaction_state, which
+      # defaults to needing 3 replicas / 2 in-sync to even get created.
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      # Dev convenience: the broker itself creates a topic on first
+      # produce/consume instead of erroring — mira-flow's own code never
+      # calls AdminClient to create topics, this is the broker's setting,
+      # not the app's. A real cluster typically disables this for topic
+      # governance; set explicitly here since Kafka's own default has
+      # varied across versions.
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+
+      CLUSTER_ID: 4L6g3nShT-eMCtK--X86sw
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: mira-flow-kafka-ui
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAP_SERVERS: kafka:19092
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+  app:
+    build:
+      context: .
+      target: dev
+    container_name: mira-flow-app
+    working_dir: /app
+    volumes:
+      - .:/app
+      - venv:/opt/venv   # named volume: keeps the image's baked venv under the bind mount
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:19092
+      DATABASE_URL: sqlite:////app/mira_flow.db
+    depends_on:
+      kafka:
+        condition: service_healthy
+    stdin_open: true
+    tty: true
+    command: sleep infinity
+
+  # Optional: an alternative to the default sqlite ledger (see `app`'s/
+  # `migrate`'s/`worker`'s DATABASE_URL above). Two ways to opt in:
+  #   - standalone, for `app`/local dev: `docker compose --profile postgres
+  #     up postgres`, then point DATABASE_URL at it yourself, e.g.
+  #     DATABASE_URL=postgresql+psycopg://mira:mira@localhost:5432/mira_flow
+  #     (host access; use `postgres:5432` instead of `localhost:5432` from
+  #     inside the compose network).
+  #   - `docker compose --profile worker-postgres up`, which brings this up
+  #     alongside `migrate-postgres`/`worker-postgres` below, fully wired.
+  # The psycopg driver is only guaranteed present in the `prod` image (built
+  # with the `postgres` extra) — `app`'s `dev` image needs `uv sync --extra
+  # postgres` first. See packages/ledger/pyproject.toml's `postgres` extra.
+  postgres:
+    profiles: ["postgres", "worker-postgres"]
+    image: postgres:16-alpine
+    container_name: mira-flow-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: mira
+      POSTGRES_PASSWORD: mira
+      POSTGRES_DB: mira_flow
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mira -d mira_flow"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  # One-shot: applies Alembic migrations to DATABASE_URL before `worker`
+  # starts. The prod image has no repo bind-mount to run `mira-flow
+  # init-db`'s quick-dev create_all() against, so this is what actually
+  # creates workflow_run/task_run in ./worker-db the first time.
+  migrate:
+    profiles: ["worker"]
+    build: *prod-build
+    container_name: mira-flow-migrate
+    environment:
+      DATABASE_URL: sqlite:////data/mira_flow.db
+    volumes:
+      - ./worker-db:/data
+    entrypoint: ["alembic", "-c", "packages/ledger/alembic.ini", "upgrade", "head"]
+
+  # Prod-style run: the built `prod` image (target: prod), not the dev
+  # bind-mount. Point workflows/handlers-dir at your own paths on the host —
+  # ./workflows and ./handlers below are just examples.
+  worker:
+    profiles: ["worker"]  # opt-in only: excluded from a bare `docker compose up`
+    build: *prod-build
+    container_name: mira-flow-worker
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:19092
+      DATABASE_URL: sqlite:////data/mira_flow.db
+    volumes:
+      - ./examples/avro-schema/workflows:/workflows:ro
+      - ./examples/avro-schema/handlers:/handlers:ro
+      - ./worker-db:/data
+    depends_on:
+      kafka:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    command: ["run", "--workflows-dir", "/workflows", "--handlers-dir", "/handlers"]
+
+  # Same as `migrate`, against the `postgres` service instead of sqlite —
+  # activate together with `docker compose --profile worker-postgres up`
+  # (that also brings up `postgres` itself, since it carries this profile
+  # too). No ./worker-db bind mount needed: postgres persists via its own
+  # `postgres-data` volume.
+  migrate-postgres:
+    profiles: ["worker-postgres"]
+    build: *prod-build-postgres
+    container_name: mira-flow-migrate-postgres
+    environment:
+      DATABASE_URL: postgresql+psycopg://mira:mira@postgres:5432/mira_flow
+    entrypoint: ["alembic", "-c", "packages/ledger/alembic.ini", "upgrade", "head"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # Same as `worker`, against the `postgres` service instead of sqlite.
+  worker-postgres:
+    profiles: ["worker-postgres"]
+    build: *prod-build-postgres
+    container_name: mira-flow-worker-postgres
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:19092
+      DATABASE_URL: postgresql+psycopg://mira:mira@postgres:5432/mira_flow
+    volumes:
+      - ./examples/avro-schema/workflows:/workflows:ro
+      - ./examples/avro-schema/handlers:/handlers:ro
+    depends_on:
+      kafka:
+        condition: service_healthy
+      migrate-postgres:
+        condition: service_completed_successfully
+    command: ["run", "--workflows-dir", "/workflows", "--handlers-dir", "/handlers"]
+
+volumes:
+  venv:
+  postgres-data:

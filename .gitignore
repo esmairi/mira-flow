@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+
+# Environments
+.venv/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+
+# IDE
+.idea/
+
+# Local data
+*.db
+
+# Secrets — local dev auth config (kafka_bootstrap_servers, kafka_sasl_*,
+# database_url, etc.); never committed. See settings.py for the Kubernetes-
+# friendly alternatives (env vars / mounted secret files).
+.env

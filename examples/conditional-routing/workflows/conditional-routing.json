@@ -1,0 +1,46 @@
+{
+  "name": "example_conditional_routing",
+  "version": 1,
+  "entry_consumer": "input-consumer",
+  "consumers": [
+    { "name": "input-consumer", "topic": "ex-cond-input" }
+  ],
+  "producers": [
+    { "name": "flagged-producer", "topic": "ex-cond-flagged" },
+    { "name": "high-producer", "topic": "ex-cond-high" },
+    { "name": "medium-producer", "topic": "ex-cond-medium" },
+    { "name": "low-producer", "topic": "ex-cond-low" }
+  ],
+  "jobs": [
+    {
+      "name": "classify",
+      "handler": "classify_handler",
+      "consumer": "input-consumer",
+      "producer": [
+        {
+          "name": "flagged-producer",
+          "when": {
+            "any": [
+              { "field": "category", "op": "eq", "value": "urgent" },
+              { "field": "category", "op": "eq", "value": "escalate" }
+            ]
+          }
+        },
+        {
+          "name": "high-producer",
+          "when": { "field": "score", "op": "gte", "value": 90 }
+        },
+        {
+          "name": "medium-producer",
+          "when": {
+            "all": [
+              { "field": "score", "op": "gte", "value": 50 },
+              { "field": "score", "op": "lt", "value": 90 }
+            ]
+          }
+        },
+        { "name": "low-producer" }
+      ]
+    }
+  ]
+}

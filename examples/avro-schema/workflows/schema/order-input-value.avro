@@ -1,0 +1,8 @@
+{
+  "type": "record",
+  "name": "OrderInput",
+  "fields": [
+    { "name": "order_id", "type": "string" },
+    { "name": "amount", "type": "double" }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "name": "example_external_trigger",
+  "version": 1,
+  "consumers": [
+    { "name": "events-consumer", "topic": "ex-external-events" }
+  ],
+  "producers": [],
+  "jobs": [
+    {
+      "name": "handle_event",
+      "handler": "handle_event_handler",
+      "consumer": "events-consumer",
+      "producer": null
+    }
+  ]
+}

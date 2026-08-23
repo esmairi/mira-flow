@@ -1,0 +1,55 @@
+{
+  "name": "extract_pipeline",
+  "version": 1,
+  "entry_consumer": "response-consumer",
+  "consumers": [
+    {
+      "name": "response-consumer",
+      "topic": "topic-response-1",
+      "group": "group1",
+      "schema_avro_value": "schema/topic-response-value.avro",
+      "schema_avro_key": "schema/topic-response-key.avro",
+      "params": {
+        "session.timeout.ms": 10000
+      },
+      "instances": 3
+    },
+    {
+      "name": "command-consumer",
+      "topic": "topic-command-1",
+      "group": "group1"
+    }
+  ],
+  "producers": [
+    {
+      "name": "command-producer",
+      "topic": "topic-command-1",
+      "schema_avro_value": "schema/topic-command-value.avro",
+      "schema_avro_key": "schema/topic-command-key.avro",
+      "params": {
+        "linger.ms": 5
+      }
+    }
+  ],
+  "jobs": [
+    {
+      "name": "extract_text",
+      "handler": "extract_text_handler",
+      "consumer": "response-consumer",
+      "producer": "command-producer",
+      "params": {
+        "p1": "v1",
+        "p2": "v2"
+      },
+      "retries": 2,
+      "retry_delay_seconds": 5
+    },
+    {
+      "name": "index_document",
+      "handler": "index_document_handler",
+      "consumer": "command-consumer",
+      "producer": null,
+      "params": {}
+    }
+  ]
+}

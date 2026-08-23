@@ -1,0 +1,28 @@
+{
+  "name": "example_avro_schema",
+  "version": 1,
+  "entry_consumer": "order-consumer",
+  "consumers": [
+    {
+      "name": "order-consumer",
+      "topic": "ex-avro-orders-in",
+      "schema_avro_value": "schema/order-input-value.avro",
+      "schema_avro_key": "schema/order-input-key.avro"
+    }
+  ],
+  "producers": [
+    {
+      "name": "validated-producer",
+      "topic": "ex-avro-orders-validated",
+      "schema_avro_value": "schema/order-validated-value.avro"
+    }
+  ],
+  "jobs": [
+    {
+      "name": "validate_order",
+      "handler": "order_validate_handler",
+      "consumer": "order-consumer",
+      "producer": "validated-producer"
+    }
+  ]
+}

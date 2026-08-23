@@ -1,0 +1,18 @@
+[project]
+name = "mira-flow-core"
+version = "0.1.0"
+description = "Mira Flow: run a single workflow end-to-end against Kafka, no DB ledger — every DB-free module (transport, wiring, execution, core) in one installable package"
+requires-python = ">=3.13"
+dependencies = [
+    "confluent-kafka>=2.5",
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+    "fastavro>=1.9",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mira_flow"]

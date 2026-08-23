@@ -1,0 +1,23 @@
+[project]
+name = "mira-flow-api-server"
+version = "0.1.0"
+description = "Mira Flow: HTTP API over the ledger + workflow configs — browse workflows/runs/tasks, trigger/cancel/retry — for a UI (Airflow-style)"
+requires-python = ">=3.13"
+dependencies = [
+    "mira-flow-core",
+    "mira-flow-ledger",
+    "sqlalchemy>=2.0",
+    "fastapi>=0.115",
+    "uvicorn>=0.32",
+]
+
+[tool.uv.sources]
+mira-flow-core = { workspace = true }
+mira-flow-ledger = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mira_flow"]
