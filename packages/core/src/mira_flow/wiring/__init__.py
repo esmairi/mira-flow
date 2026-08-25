@@ -18,6 +18,7 @@ from mira_flow.wiring.config import (
 )
 from mira_flow.wiring.registry import (
     HandlerRegistry,
+    HandlerResult,
     default_registry,
     handler,
     load_handlers_from_dir,
@@ -31,6 +32,7 @@ __all__ = [
     "ConfigError",
     "ConsumerSpec",
     "HandlerRegistry",
+    "HandlerResult",
     "JobSpec",
     "ProducerRoute",
     "ProducerSpec",

@@ -178,9 +178,10 @@ class KafkaBroker:
     commit. A topic normally has one instance (§2 ConsumerSpec.instances
     defaults to 1) — set it higher to run several Consumer clients in the
     same group, so Kafka splits the topic's partitions across them; safe for
-    our per-run ledger semantics regardless, since Message.key =
-    workflow_run_id routes every run's messages to one partition. Pending
-    offsets are tracked per (topic, instance).
+    our per-run ledger semantics regardless, since Message.kafka_key
+    defaults to workflow_run_id, routing every run's messages to one
+    partition unless a handler overrides it. Pending offsets are tracked
+    per (topic, instance).
 
     `consumer_params` / `producer_params` are extra confluent_kafka client
     config, from each topic's ConsumerSpec/ProducerSpec.params (§2). Because
@@ -272,7 +273,8 @@ class KafkaBroker:
         producer.produce(
             topic,
             value=message.to_bytes(),
-            key=message.key,
+            key=message.kafka_key,
+            headers=message.to_headers(),
             on_delivery=lambda err, msg: outcome.append((err, msg)),
         )
         timeout = settings.kafka_publish_timeout_seconds
@@ -360,8 +362,15 @@ class KafkaBroker:
                 raise BrokerError(f"consumer on {topic!r} (instance {instance}) failed: {err}")
             logger.warning("kafka consumer event on %s#%d: %s", topic, instance, err)
             return None
+        raw_topic, data = raw.topic(), raw.value()
+        if raw_topic is None or data is None:
+            # Tombstone (null-value) message, or a topic-less raw message —
+            # same as a malformed one: nothing to hand the worker.
+            logger.warning("skipping message with no topic/value on %s#%d", topic, instance)
+            _check_commit(consumer.commit(message=raw, asynchronous=False), topic, instance)
+            return None
         try:
-            message = Message.from_bytes(raw.topic(), raw.value())
+            message = Message.from_kafka(raw_topic, data, raw.headers(), raw.key())
         except ValueError:
             logger.warning("skipping malformed message on %s#%d", topic, instance)
             _check_commit(consumer.commit(message=raw, asynchronous=False), topic, instance)
@@ -430,9 +439,7 @@ class KafkaBroker:
         with self._lock:
             if self._producer is None:
                 logger.debug("creating shared producer (bootstrap=%s)", self._bootstrap)
-                self._producer = Producer(
-                    _producer_config(self._bootstrap, self._producer_params)
-                )
+                self._producer = Producer(_producer_config(self._bootstrap, self._producer_params))
             return self._producer
 
     def _consumer_for(self, topic: str, instance: int) -> Consumer:
@@ -458,7 +465,5 @@ class KafkaBroker:
                 name = f"{group}:{topic}#{instance}"
                 consumer.subscribe([topic], on_assign=_make_on_assign(name))
                 self._consumers[key] = consumer
-                logger.debug(
-                    "created consumer for %s#%d (group=%s)", topic, instance, group
-                )
+                logger.debug("created consumer for %s#%d (group=%s)", topic, instance, group)
             return consumer

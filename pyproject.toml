@@ -33,6 +33,7 @@ dev = [
     "ruff>=0.8",
     "testcontainers>=4",
     "httpx>=0.27",
+    "prek>=0.2",
 ]
 
 [build-system]

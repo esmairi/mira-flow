@@ -20,5 +20,10 @@ from mira_flow.wiring import handler
 
 @handler("process_task_handler")
 def process_task(message: Message, params: dict[str, Any]) -> dict[str, Any] | None:
-    print(f"[{threading.current_thread().name}] processing task {message.payload}")
+    # task_run_id is always None here: it's only set by orchestrator's
+    # ledgered path, and this runs via core.WorkflowManager (no DB).
+    print(
+        f"[{threading.current_thread().name}] processing task {message.payload} "
+        f"(headers={message.headers}, task_run_id={message.task_run_id})"
+    )
     return None

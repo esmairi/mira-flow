@@ -9,10 +9,57 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from pydantic import BaseModel, ConfigDict, Field
+
 from mira_flow.transport import Message
 from mira_flow.wiring.config import ConfigError
 
-Handler = Callable[[Message, dict[str, Any]], dict[str, Any] | None]
+
+class HandlerResult(BaseModel):
+    """A handler's output payload, plus any headers/key to attach to the
+    outgoing message it's routed to.
+
+    Only needed when a handler wants to set headers or a key — otherwise
+    return a bare payload dict (or None for terminal) as before; see
+    `split_handler_output`.
+
+    Attributes:
+        payload: The handler's output, routed the same as a bare dict
+            return would be; None means terminal, same as returning None.
+        headers: Headers to attach to the outgoing message, merged into its
+            `Message.headers` (see `transport.Message`).
+        key: Kafka key to attach to the outgoing message (`Message.key`).
+            None (the default) leaves it to fall back to workflow_run_id —
+            see `Message.kafka_key`.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    payload: dict[str, Any] | None = None
+    headers: dict[str, str] = Field(default_factory=dict)
+    key: str | None = None
+
+
+HandlerOutput = dict[str, Any] | HandlerResult | None
+Handler = Callable[[Message, dict[str, Any]], HandlerOutput]
+
+
+def split_handler_output(
+    output: HandlerOutput,
+) -> tuple[dict[str, Any] | None, dict[str, str], str | None]:
+    """Splits a handler's return value into (payload, headers, key) to set.
+
+    Args:
+        output: What the handler returned — a bare payload dict, None
+            (terminal), or a HandlerResult carrying headers/key too.
+
+    Returns:
+        (payload, headers, key); headers is {} and key is None unless
+        output was a HandlerResult.
+    """
+    if isinstance(output, HandlerResult):
+        return output.payload, dict(output.headers), output.key
+    return output, {}, None
 
 
 class HandlerRegistry:

@@ -44,17 +44,13 @@ Both modes accept:
   see `wiring.load_handlers_from_dir`'s docstring for exactly what's skipped
   (`_`-prefixed files/dirs, e.g. `__pycache__`)
 
-`--workflow` mode additionally accepts `--trigger '<json>'` to publish one
-message to the entry topic on startup, so you don't need a second terminal
-just to kick things off:
-
-```bash
-uv run mira-flow run --workflow workflows/example.json --trigger '{"n": 1}'
-```
-
-`--trigger` without `--workflow` is a startup error — the ledgered path's
-equivalent is the separate `trigger` command below, which needs a DB row
-(`--trigger` here just publishes directly, no ledger involved).
+Neither mode publishes anything on its own — start `run`, then publish from
+another terminal. In `--workflow` mode that's any direct producer (see
+`examples/*/trigger.py` for a template — `KafkaBroker.publish()` straight to
+the entry topic, no ledger involved) or, from Python, `WorkflowManager.
+trigger(payload)` (see `packages/core/src/mira_flow/core/README.md`'s
+example). In `--workflows-dir` mode, that's the `trigger` command below,
+which needs a DB row first.
 
 Both modes install a `SIGTERM` handler (translating a container/Kubernetes
 stop signal into a clean `stop()`, same as `Ctrl+C`) — see `_install_

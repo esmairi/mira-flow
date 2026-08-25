@@ -5,9 +5,10 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -377,9 +378,7 @@ class WorkflowRepository:
         task_run.ended_at = _now()
         task_run.next_retry_at = next_retry_at
         self._session.flush()
-        logger.debug(
-            "task_run: %s UP_FOR_RETRY, next_retry_at=%s", task_run_id, next_retry_at
-        )
+        logger.debug("task_run: %s UP_FOR_RETRY, next_retry_at=%s", task_run_id, next_retry_at)
 
     def fail_task_run(self, task_run_id: str, error: BaseException) -> None:
         """Marks a task_run FAILED, and its workflow_run FAILED too.
@@ -438,8 +437,7 @@ class WorkflowRepository:
             return None
         if run.status not in _CANCELLABLE_RUN_STATUSES:
             raise InvalidTransitionError(
-                f"workflow_run {run_id!r} is {run.status}, "
-                "can only cancel a PENDING or RUNNING run"
+                f"workflow_run {run_id!r} is {run.status}, can only cancel a PENDING or RUNNING run"
             )
         self._update_run_locked(run, status="CANCELLED", ended_at=_now())
         logger.debug("workflow_run: %s CANCELLED", run.id)
@@ -462,21 +460,26 @@ class WorkflowRepository:
         expected = run.lock_version
         fields["lock_version"] = expected + 1
         fields["updated_at"] = _now()
-        result = self._session.execute(
-            update(WorkflowRun)
-            .where(WorkflowRun.id == run.id, WorkflowRun.lock_version == expected)
-            .values(**fields)
+        # Session.execute() is typed to return the generic ORM Result, but a
+        # Core UPDATE statement always actually gets a CursorResult (which
+        # is what carries .rowcount) back.
+        result = cast(
+            CursorResult,
+            self._session.execute(
+                update(WorkflowRun)
+                .where(WorkflowRun.id == run.id, WorkflowRun.lock_version == expected)
+                .values(**fields)
+            ),
         )
         if result.rowcount == 0:
             raise ConcurrentUpdateError(
-                f"workflow_run {run.id!r} was updated concurrently (expected lock_version {expected})"
+                f"workflow_run {run.id!r} was updated concurrently "
+                f"(expected lock_version {expected})"
             )
         for key, value in fields.items():
             setattr(run, key, value)
         self._session.flush()
-        logger.debug(
-            "workflow_run: %s lock_version %d -> %d", run.id, expected, expected + 1
-        )
+        logger.debug("workflow_run: %s lock_version %d -> %d", run.id, expected, expected + 1)
 
     # -- read queries (admin UI) -----------------------------------------------
 

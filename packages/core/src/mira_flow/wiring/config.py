@@ -46,9 +46,10 @@ class ConsumerSpec(BaseModel):
             Kafka splits the topic's partitions across them — safe up to
             the partition count; extra instances beyond that just sit idle
             with none assigned. Safe for our per-run ledger semantics
-            regardless of value: Message.key = workflow_run_id, so Kafka
-            always routes one run's messages to the same partition, meaning
-            at most one instance ever handles a given run.
+            regardless of value: Message.kafka_key defaults to
+            workflow_run_id, so Kafka routes one run's messages to the same
+            partition (meaning at most one instance ever handles a given
+            run) unless a handler overrides the key.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")

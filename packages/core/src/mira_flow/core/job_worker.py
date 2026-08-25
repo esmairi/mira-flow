@@ -18,7 +18,7 @@ from mira_flow.core.consumer import TopicConsumer
 from mira_flow.core.producer import TopicProducer
 from mira_flow.execution import NoMatchingRouteError, ResolvedRoute, select_route
 from mira_flow.transport.message import Message
-from mira_flow.wiring.registry import Handler
+from mira_flow.wiring.registry import Handler, HandlerOutput, split_handler_output
 
 logger = logging.getLogger(__name__)
 
@@ -109,29 +109,37 @@ class JobWorker:
         )
         return self._stop_event.wait(self._retry_delay_seconds)
 
-    def _publish_output(self, output: Any, message: Message) -> None:
+    def _publish_output(self, output: HandlerOutput, message: Message) -> None:
         """Routes and publishes a handler's output, if it produced one.
 
         Args:
-            output: The handler's return value; None or an empty
-                `output_routes` means this job is terminal.
+            output: The handler's return value; None (or a HandlerResult
+                whose payload is None) or an empty `output_routes` means
+                this job is terminal.
             message: The message being processed, for its correlation_id.
 
         Raises:
             NoMatchingRouteError: If `output_routes` is non-empty but no
-                route matched `output`.
+                route matched the output payload.
         """
-        if output is None or not self._output_routes:
+        payload, headers, key = split_handler_output(output)
+        if payload is None or not self._output_routes:
             logger.debug("task %s: succeeded, terminal", self.task_name)
             return
-        topic = select_route(self._output_routes, output)
+        topic = select_route(self._output_routes, payload)
         if topic is None:
             raise NoMatchingRouteError(
-                f"task {self.task_name!r}: no producer route matched output {output!r}"
+                f"task {self.task_name!r}: no producer route matched output {payload!r}"
             )
         logger.debug("task %s: routing output to %s", self.task_name, topic)
         self._producers[topic].publish(
-            Message(topic=topic, payload=output, correlation_id=message.correlation_id)
+            Message(
+                topic=topic,
+                payload=payload,
+                correlation_id=message.correlation_id,
+                headers=headers,
+                key=key,
+            )
         )
 
     def run(self) -> None:

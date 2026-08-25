@@ -41,4 +41,9 @@ def load_avro_schema(schema_ref: str | None, base_dir: Path) -> dict[str, Any] |
     if schema_ref is None:
         return None
     raw_schema = json.loads((base_dir / schema_ref).read_text())
-    return fastavro.parse_schema(raw_schema, named_schemas={})
+    parsed = fastavro.parse_schema(raw_schema, named_schemas={})
+    # fastavro's stub covers every schema shape (bare "string", a union
+    # list, ...), but a schema_avro_value/key file here is always a record
+    # (a JSON object) — config-parse-time validation already enforced that.
+    assert isinstance(parsed, dict)
+    return parsed

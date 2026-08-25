@@ -1,0 +1,33 @@
+# Run via prek (https://github.com/j178/prek), a Rust reimplementation of
+# pre-commit — same config format and hook cache, faster/no Python bootstrap
+# needed. `make hooks-install` wires this into `.git/hooks/pre-commit`;
+# `make hooks` runs it on the whole tree on demand (e.g. in CI).
+#
+# Hooks are self-contained (their own pinned toolchain, not `uv run`) so
+# they work before/without a synced project .venv.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.3 # keep in sync with uv.lock's ruff version
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/astral-sh/ty-pre-commit
+    rev: v0.0.74
+    hooks:
+      - id: ty
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: ^packages/ledger/alembic/versions/
+      - id: end-of-file-fixer
+        exclude: ^packages/ledger/alembic/versions/
+      - id: check-toml
+      - id: check-yaml
+      - id: check-added-large-files
+      - id: check-merge-conflict
+      - id: mixed-line-ending
+        exclude: ^packages/ledger/alembic/versions/

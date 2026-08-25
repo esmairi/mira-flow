@@ -25,5 +25,10 @@ def flaky(message: Message, params: dict[str, Any]) -> dict[str, Any] | None:
     fail_until_attempt = params.get("fail_until_attempt", 1)
     if count < fail_until_attempt:
         raise RuntimeError(f"simulated transient failure (attempt {count}/{fail_until_attempt})")
-    print(f"[retries] succeeded on attempt {count}: {message.payload}")
+    # task_run_id is always None here: it's only set by orchestrator's
+    # ledgered path, and this runs via core.WorkflowManager (no DB).
+    print(
+        f"[retries] succeeded on attempt {count}: {message.payload} "
+        f"(task_run_id={message.task_run_id})"
+    )
     return None

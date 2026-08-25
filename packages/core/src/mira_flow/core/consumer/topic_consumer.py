@@ -184,8 +184,15 @@ class TopicConsumer:
                 raise CoreBrokerError(f"consumer on {self.topic!r} failed: {err}")
             logger.warning("kafka consumer event on %s: %s", self.topic, err)
             return None
+        topic, data = raw.topic(), raw.value()
+        if topic is None or data is None:
+            # Tombstone (null-value) message, or a topic-less raw message —
+            # same as a malformed one: nothing to hand the worker.
+            logger.warning("skipping message with no topic/value on %s", self.topic)
+            _check_commit(self._consumer.commit(message=raw, asynchronous=False), self.topic)
+            return None
         try:
-            message = Message.from_bytes(raw.topic(), raw.value())
+            message = Message.from_kafka(topic, data, raw.headers(), raw.key())
         except ValueError:
             # Poison pill: nothing to hand the worker, commit so it doesn't loop.
             logger.warning("skipping malformed message on %s", self.topic)

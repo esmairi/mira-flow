@@ -8,7 +8,7 @@ first.
 
 | Case | Demonstrates |
 |---|---|
-| [`linear-pipeline/`](linear-pipeline) | A strictly sequential two-job chain: `entry_consumer` -> job -> job -> terminal (`producer: null`), bare-string producer route |
+| [`linear-pipeline/`](linear-pipeline) | A strictly sequential two-job chain: `entry_consumer` -> job -> job -> terminal (`producer: null`), bare-string producer route; also headers — `ingest` sets one via `HandlerResult`, `transform` reads it via `message.headers` |
 | [`conditional-routing/`](conditional-routing) | One job routing to 4 topics: a plain `Comparison`, `AnyOf`, `AllOf`, and a catch-all default route (no `when`, must be last) |
 | [`avro-schema/`](avro-schema) | `schema_avro_value`/`schema_avro_key` on both consumer and producer, and the two different runtime-enforcement failure modes (poison-pill skip vs. retry) |
 | [`external-trigger/`](external-trigger) | A workflow with no `entry_consumer` — started by an external publisher, not `mira-flow trigger` |
@@ -17,8 +17,8 @@ first.
 
 ## Running a case
 
-Start the workflow (no `--trigger` needed — that's what `trigger.py` is
-for), then in another terminal, publish to it:
+Start the workflow, then in another terminal, publish to it with
+`trigger.py` (`run` itself never publishes anything):
 
 ```bash
 uv run mira-flow run --workflow examples/linear-pipeline/workflows/linear-pipeline.json \

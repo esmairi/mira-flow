@@ -12,6 +12,14 @@ sync: ## Install/update the whole workspace (all packages, incl. dev deps)
 lint: ## Lint with ruff
 	uv run ruff check .
 
+.PHONY: hooks-install
+hooks-install: ## Install the prek git pre-commit hook (run once after clone)
+	uv run prek install
+
+.PHONY: hooks
+hooks: ## Run all prek hooks against the whole tree (what pre-commit would run)
+	uv run prek run --all-files
+
 .PHONY: test
 test: ## Run the test suite
 	uv run pytest
@@ -50,8 +58,12 @@ migration: ## Autogenerate a new migration from model changes (usage: make migra
 	uv run alembic -c packages/ledger/alembic.ini revision --autogenerate -m "$(name)"
 
 .PHONY: run
-run: ## Start the orchestrator against workflows/ (needs `make up` + `make init-db` first)
+run: ## Start the ledgered orchestrator against workflows/ (needs `make up` + `make init-db` first)
 	uv run mira-flow run --workflows-dir workflows --import examples.echo
+
+.PHONY: run-workflow
+run-workflow: ## Run one workflow config with no DB ledger (usage: make run-workflow file=path/to/config.json)
+	uv run mira-flow run --workflow $(file) --import examples.echo
 
 .PHONY: api-server
 api-server: ## Start the API server (http://localhost:8001, docs at /docs)

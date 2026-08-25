@@ -2,7 +2,8 @@
 """Publishes to ex-external-events — the *only* way to start this workflow,
 since it declares no entry_consumer (`mira-flow trigger`/`WorkflowManager.
 trigger()` both refuse: there's no entry topic to publish to). Stands in
-for the external service this workflow expects to be fed by.
+for the external service this workflow expects to be fed by, including a
+custom Kafka header (see handlers/handlers.py, which prints it back).
 """
 
 from __future__ import annotations
@@ -32,7 +33,7 @@ def main() -> None:
 
     broker = KafkaBroker(bootstrap_servers=args.bootstrap_servers)
     try:
-        message = Message(topic=TOPIC, payload=payload)
+        message = Message(topic=TOPIC, payload=payload, headers={"source": "external-service"})
         broker.publish(TOPIC, message)
     finally:
         broker.close()

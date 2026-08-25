@@ -71,11 +71,13 @@ manager.trigger({"n": 1})
 manager.run_forever()   # blocks; Ctrl+C or manager.stop() to exit
 ```
 
-Equivalent from the CLI:
+Equivalent from the CLI (the CLI itself never publishes — `run` only
+starts the workflow; publish separately, e.g. from another terminal with a
+`KafkaBroker.publish()` script, same shape as `manager.trigger()` above —
+see `examples/*/trigger.py` for a template):
 
 ```bash
-uv run mira-flow run --workflow workflows/example.json \
-    --import examples.echo --trigger '{"n": 1}'
+uv run mira-flow run --workflow workflows/example.json --import examples.echo
 ```
 
 ## What you give up vs. `orchestrator`

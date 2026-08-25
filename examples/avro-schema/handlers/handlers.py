@@ -12,6 +12,9 @@ retried like any handler failure; a consumer-side mismatch (an inbound
 message not matching order-input-value.avro) is treated as a poison pill —
 logged and silently skipped, the handler never runs. Try triggering with a
 payload missing "amount" to see the poison-pill path.
+
+Also sets a header via HandlerResult — schema validation only ever checks
+the payload (§8), so it's untouched by whatever's on `headers`.
 """
 
 from __future__ import annotations
@@ -19,9 +22,12 @@ from __future__ import annotations
 from typing import Any
 
 from mira_flow.transport import Message
-from mira_flow.wiring import handler
+from mira_flow.wiring import HandlerResult, handler
 
 
 @handler("order_validate_handler")
-def validate_order(message: Message, params: dict[str, Any]) -> dict[str, Any] | None:
-    return {**message.payload, "validated": True}
+def validate_order(message: Message, params: dict[str, Any]) -> HandlerResult:
+    return HandlerResult(
+        payload={**message.payload, "validated": True},
+        headers={"validated-by": "order_validate_handler"},
+    )

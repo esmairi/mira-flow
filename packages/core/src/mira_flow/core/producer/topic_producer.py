@@ -37,7 +37,7 @@ def _producer_config(bootstrap: str, params: dict[str, Any] | None) -> dict[str,
     return config
 
 
-def _wait_for_delivery(producer: Producer, outcome: list[object], timeout: float) -> None:
+def _wait_for_delivery(producer: Producer, outcome: list[Any], timeout: float) -> None:
     """Polls until this message's `on_delivery` callback fires, or timeout.
 
     Deliberately doesn't just call `Producer.flush(timeout)` — that blocks
@@ -118,8 +118,8 @@ class TopicProducer:
         """Publishes a message and blocks until delivery is confirmed.
 
         Args:
-            message: The message to publish; `message.key` sets the Kafka
-                message key.
+            message: The message to publish; `message.kafka_key` sets the
+                Kafka message key.
 
         Raises:
             CoreBrokerError: If this topic has a schema configured and
@@ -133,7 +133,8 @@ class TopicProducer:
         self._producer.produce(
             self.topic,
             value=message.to_bytes(),
-            key=message.key,
+            key=message.kafka_key,
+            headers=message.to_headers(),
             on_delivery=lambda err, msg: outcome.append((err, msg)),
         )
         timeout = settings.kafka_publish_timeout_seconds

@@ -14,7 +14,6 @@ import threading
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 from datetime import UTC, datetime, timedelta
-from typing import Any
 
 from sqlalchemy.orm import Session
 
@@ -22,6 +21,7 @@ from mira_flow.core import JobBinding
 from mira_flow.execution import NoMatchingRouteError, select_route
 from mira_flow.ledger import WorkflowRepository
 from mira_flow.transport import Broker, Message
+from mira_flow.wiring.registry import HandlerOutput, split_handler_output
 
 logger = logging.getLogger(__name__)
 
@@ -165,9 +165,7 @@ class JobWorker:
         with self._session_scope() as session:
             repo = WorkflowRepository(session)
             if should_retry:
-                next_retry_at = datetime.now(UTC) + timedelta(
-                    seconds=binding.retry_delay_seconds
-                )
+                next_retry_at = datetime.now(UTC) + timedelta(seconds=binding.retry_delay_seconds)
                 repo.retry_task_run(task_run_id, exc, next_retry_at)
             else:
                 repo.fail_task_run(task_run_id, exc)
@@ -207,7 +205,7 @@ class JobWorker:
     def _record_success(
         self,
         task_run_id: str,
-        output: dict[str, Any] | None,
+        output: HandlerOutput,
         workflow_run_id: str | None,
         correlation_id: str | None,
     ) -> None:
@@ -217,38 +215,47 @@ class JobWorker:
         recorded as a task failure, the same as an unmatched route.
 
         Args:
-            task_run_id: The task_run row to record the outcome against.
-            output: The handler's return value, or None if terminal.
+            task_run_id: The task_run row to record the outcome against;
+                also stamped on the outgoing message as its provenance
+                (`Message.task_run_id`).
+            output: The handler's return value; None (or a HandlerResult
+                whose payload is None) means terminal.
             workflow_run_id: This run's ID, for the outgoing message.
             correlation_id: This run's correlation ID, for the outgoing message.
         """
         binding = self._binding
         try:
+            payload, headers, key = split_handler_output(output)
             chosen_topic = (
-                select_route(binding.output_routes, output) if output is not None else None
+                select_route(binding.output_routes, payload) if payload is not None else None
             )
-            if binding.output_routes and output is not None and chosen_topic is None:
+            if binding.output_routes and payload is not None and chosen_topic is None:
                 # Handler succeeded but nothing declared matches its output —
                 # not a handler failure, not retried, same bucket as a
                 # record/publish failure below.
                 raise NoMatchingRouteError(
-                    f"task {binding.task_name!r}: no producer route matched "
-                    f"output {output!r}"
+                    f"task {binding.task_name!r}: no producer route matched output {payload!r}"
                 )
             terminal = chosen_topic is None
             # Record first, durably, in its own committed transaction.
             with self._session_scope() as session:
                 repo = WorkflowRepository(session)
-                repo.succeed_task_run(task_run_id, output, terminal=terminal)
+                repo.succeed_task_run(task_run_id, payload, terminal=terminal)
             if terminal:
                 logger.debug("task %s: succeeded, terminal", binding.task_name)
             else:
                 logger.debug("task %s: routing output to %s", binding.task_name, chosen_topic)
+                # chosen_topic is only ever set (non-None) when payload is
+                # also non-None — see the ternary above.
+                assert payload is not None
                 next_message = Message(
                     topic=chosen_topic,
-                    payload=output,
+                    payload=payload,
                     workflow_run_id=workflow_run_id,
+                    task_run_id=task_run_id,
                     correlation_id=correlation_id,
+                    headers=headers,
+                    key=key,
                 )
                 self._broker.publish(chosen_topic, next_message)
         except Exception as exc:  # noqa: BLE001 - record, routing, or publish failure — not retried

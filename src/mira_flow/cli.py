@@ -5,7 +5,9 @@ from __future__ import annotations
 import importlib
 import json
 import logging
+import os
 import signal
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +37,16 @@ def main(
     ),
 ) -> None:
     """Mira Flow: a minimal event-driven workflow engine."""
+    # The installed `mira-flow` console-script is a file path, not `-m`/`-c`
+    # — Python sets sys.path[0] to *its* directory (e.g. .../venv/bin) in
+    # that case, not the current working directory, so `--import <module>`
+    # (a plain importlib.import_module, unlike --handlers-dir's by-path
+    # loading) could never resolve a module relative to wherever the user
+    # actually runs `mira-flow` from. `python -m`/`-c` don't have this
+    # problem (they put '' / CWD on sys.path[0] automatically) — this makes
+    # the console-script behave the same way.
+    if (cwd := os.getcwd()) not in sys.path:
+        sys.path.insert(0, cwd)
     logging.basicConfig(
         level=log_level.upper(),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -176,14 +188,12 @@ def init_db_command() -> None:
     typer.echo("database initialized")
 
 
-def _run_single_workflow(config_path: str, trigger_input: str | None) -> None:
+def _run_single_workflow(config_path: str) -> None:
     """Runs one workflow config with no DB ledger (`core.WorkflowManager`) —
     `run`'s `--workflow` path.
 
     Args:
         config_path: Path to the workflow's JSON config.
-        trigger_input: JSON payload to publish to the entry topic on
-            startup, or None to just start listening.
     """
     try:
         manager = WorkflowManager.from_file(config_path)
@@ -193,9 +203,6 @@ def _run_single_workflow(config_path: str, trigger_input: str | None) -> None:
     except KeyError as exc:
         typer.echo(f"startup error: {exc}", err=True)
         raise typer.Exit(1) from exc
-
-    if trigger_input is not None:
-        manager.trigger(_parse_json_object_or_exit(trigger_input))
 
     typer.echo(f"running workflow {config_path!r} (no DB ledger)")
     _install_sigterm_handler(manager)
@@ -218,12 +225,6 @@ def run_command(
     handlers_dirs: list[str] = typer.Option(
         [], "--handlers-dir", help="directory of handler .py files to auto-register"
     ),
-    trigger_input: str = typer.Option(
-        None,
-        "--trigger",
-        help="JSON payload to publish to the entry consumer's topic on startup "
-        "(only valid with --workflow)",
-    ),
 ) -> None:
     """Start the orchestrator (--workflows-dir) or a single ledger-free
     workflow (--workflow): import handlers, load workflow(s), run."""
@@ -232,11 +233,8 @@ def run_command(
     _load_handlers_from_dirs_or_exit(handlers_dirs)
 
     if workflow is not None:
-        _run_single_workflow(workflow, trigger_input)
+        _run_single_workflow(workflow)
         return
-    if trigger_input is not None:
-        typer.echo("--trigger requires --workflow", err=True)
-        raise typer.Exit(1)
 
     configs = _load_configs_or_exit(workflows_dir)
     if not configs:

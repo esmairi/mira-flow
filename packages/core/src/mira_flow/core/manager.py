@@ -149,9 +149,9 @@ class WorkflowManager:
         Each instance gets its own Consumer client, all in the same group so
         Kafka splits the topic's partitions across them. `core` has no
         ledger to race on, so instances need no coordination of their own —
-        Kafka's per-key partition affinity (Message.key = workflow_run_id)
-        just means messages for one run still arrive in order, if a handler
-        cares.
+        Kafka's per-key partition affinity (Message.kafka_key defaults to
+        workflow_run_id) just means messages for one run still arrive in
+        order, if a handler cares.
 
         Args:
             job: The job to build workers for.
@@ -171,7 +171,7 @@ class WorkflowManager:
             else None
         )
         labels = [f"{job.name}#{i}" for i in range(consumer_spec.instances)]
-        workers = [
+        workers: list[Worker] = [
             JobWorker(
                 task_name=job.name,
                 handler=registry.resolve(job.handler),
@@ -270,6 +270,9 @@ class WorkflowManager:
                 f"workflow {self._config.name!r} has no entry_consumer; "
                 "it must be started by publishing directly to its first job's topic"
             )
+        # _resolve_entry sets topic/producer together — producer is only
+        # non-None when topic is too.
+        assert self._entry_topic is not None
         self._entry_producer.publish(Message(topic=self._entry_topic, payload=payload))
 
     def run_forever(self) -> None:
