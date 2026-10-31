@@ -176,3 +176,21 @@ api_server/README.md` for the full endpoint list, how retry/cancel actually
 work (they publish to / mark the ledger — an `orchestrator` still needs to
 be running to act on either), and known v1 limitations (no auth, permissive
 CORS).
+
+### End-to-end tests
+
+`tests/e2e` drives the API server over HTTP against a real Kafka and
+Postgres, with a real orchestrator processing the messages: trigger →
+Kafka → JobWorkers → Postgres ledger → back out through `/runs`, plus
+idempotency, external triggers, retry, cancel and the 404/409/422 paths.
+The stack is its own compose project (`tests/e2e/compose.yaml`, host ports
+29092/55432), so it doesn't clash with `make up`:
+
+```bash
+make test-e2e   # build, run the suite in a container, tear the stack down
+```
+
+The tests skip themselves unless `MIRA_FLOW_E2E=1`, so a plain `uv run
+pytest` stays infra-free. To run them from a glibc host instead, start
+the services with `make e2e-up` and see the header of
+`tests/e2e/compose.yaml` for the env vars to set.

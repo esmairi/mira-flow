@@ -97,6 +97,10 @@ def trigger_workflow(
         idempotency_key=body.idempotency_key,
         input=body.input,
     )
+    # Commit before publishing: `get_session` only commits after this
+    # endpoint returns, and a worker consuming the message before then
+    # would find no workflow_run row for its workflow_run_id.
+    session.commit()
     message = Message(
         topic=entry_topic,
         payload=body.input,

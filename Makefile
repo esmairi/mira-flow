@@ -24,6 +24,19 @@ hooks: ## Run all prek hooks against the whole tree (what pre-commit would run)
 test: ## Run the test suite
 	uv run pytest
 
+.PHONY: test-e2e
+test-e2e: ## Run the end-to-end API tests against a throwaway Kafka + Postgres (docker compose)
+	docker compose -f tests/e2e/compose.yaml run --rm --build tests; \
+	status=$$?; docker compose -f tests/e2e/compose.yaml down -v; exit $$status
+
+.PHONY: e2e-up
+e2e-up: ## Start only the e2e Kafka + Postgres (host ports 29092/55432), to run tests/e2e from the host
+	docker compose -f tests/e2e/compose.yaml up -d --wait kafka postgres
+
+.PHONY: e2e-down
+e2e-down: ## Stop and remove the e2e stack
+	docker compose -f tests/e2e/compose.yaml down -v
+
 .PHONY: up
 up: ## Start Kafka + kafka-ui + the dev container (docker compose)
 	docker compose up -d

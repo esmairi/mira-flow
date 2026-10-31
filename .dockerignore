@@ -7,3 +7,6 @@ __pycache__/
 .ruff_cache/
 .idea/
 *.db
+.venv2/
+venv2/
+worker-db/

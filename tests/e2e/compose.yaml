@@ -1,0 +1,87 @@
+# End-to-end test stack: a real Kafka + Postgres, plus a `tests` runner
+# container that executes tests/e2e against them. Separate compose project
+# (`name:` below) and separate host ports from the dev stack in the root
+# compose.yaml, so both can run side by side without clashing.
+#
+#   make test-e2e          # build, run the suite, tear everything down
+#
+# Or, from a glibc host with the workspace synced (`uv sync --all-packages
+# --group dev --extra postgres`), keep the stack up and run pytest directly:
+#
+#   make e2e-up
+#   MIRA_FLOW_E2E=1 KAFKA_BOOTSTRAP_SERVERS=localhost:29092 \
+#     DATABASE_URL=postgresql+psycopg://mira:mira@localhost:55432/mira_flow_e2e \
+#     uv run pytest tests/e2e
+#   make e2e-down
+name: mira-flow-e2e
+
+services:
+  kafka:
+    image: apache/kafka:3.8.0
+    hostname: kafka
+    ports:
+      - "29092:29092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      # PLAINTEXT: the `tests` container. PLAINTEXT_HOST: pytest run on the host.
+      KAFKA_LISTENERS: PLAINTEXT://kafka:19092,CONTROLLER://kafka:19093,PLAINTEXT_HOST://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:19092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:19093
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      # Tests generate unique topic names per session; let the broker create them.
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      CLUSTER_ID: e2e-MCtK--X86swe2eTest
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:29092"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "55432:5432"
+    environment:
+      POSTGRES_USER: mira
+      POSTGRES_PASSWORD: mira
+      POSTGRES_DB: mira_flow_e2e
+    # Throwaway: every `up` starts from an empty database.
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mira -d mira_flow_e2e"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  tests:
+    profiles: ["runner"]  # only via `docker compose run tests` (make test-e2e)
+    build:
+      context: ../..
+      target: dev
+    working_dir: /app
+    volumes:
+      - ../..:/app
+      - e2e-venv:/opt/venv  # keeps the image's venv under the bind mount
+    environment:
+      MIRA_FLOW_E2E: "1"
+      KAFKA_BOOTSTRAP_SERVERS: kafka:19092
+      DATABASE_URL: postgresql+psycopg://mira:mira@postgres:5432/mira_flow_e2e
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    # The dev image's venv lacks the api_server package and the postgres
+    # driver; sync them in (fast no-op after the first run thanks to e2e-venv).
+    entrypoint: ["sh", "-c", "uv sync --frozen --all-packages --group dev --extra postgres --quiet && exec \"$@\"", "--"]
+    command: ["pytest", "tests/e2e", "-v"]
+
+volumes:
+  e2e-venv:
