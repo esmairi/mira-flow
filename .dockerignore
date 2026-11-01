@@ -10,3 +10,5 @@ __pycache__/
 .venv2/
 venv2/
 worker-db/
+frontend/node_modules/
+frontend/dist/

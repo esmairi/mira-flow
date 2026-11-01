@@ -12,7 +12,6 @@ import fastavro
 from confluent_kafka import (
     OFFSET_INVALID,
     Consumer,
-    KafkaError,
     KafkaException,
     Producer,
     TopicPartition,
@@ -21,6 +20,7 @@ from confluent_kafka import Message as RawMessage
 from fastavro.validation import ValidationError as AvroValidationError
 
 from mira_flow.settings import settings
+from mira_flow.transport.kafka_support import DeliveryPoller, ensure_topic
 from mira_flow.transport.message import Message
 
 logger = logging.getLogger(__name__)
@@ -93,33 +93,6 @@ def _check_commit(committed: list[TopicPartition] | None, topic: str, instance: 
     for tp in committed or []:
         if tp.error is not None:
             logger.warning("offset commit failed on %s#%d: %s", topic, instance, tp.error)
-
-
-def _wait_for_delivery(
-    producer: Producer, outcome: list[tuple[KafkaError | None, RawMessage]], timeout: float
-) -> None:
-    """Polls until this message's `on_delivery` callback fires, or timeout.
-
-    Deliberately doesn't just call `Producer.flush(timeout)` — that blocks
-    until the *entire* shared queue drains (`len() == 0`), not until this
-    one message's callback fires. `KafkaBroker` shares one Producer across
-    every topic and caller, so `flush()` alone could block this call for
-    the full timeout on a slow *unrelated* in-flight message from another
-    caller, even though this message was already acked. Polling and
-    checking `outcome` directly bounds the wait to exactly this message.
-
-    Args:
-        producer: The Producer to poll.
-        outcome: The list this message's `on_delivery` callback appends to;
-            polling stops as soon as it's non-empty.
-        timeout: Max seconds to wait.
-    """
-    deadline = time.monotonic() + timeout
-    while not outcome:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            return
-        producer.poll(remaining)
 
 
 def _validate_payload(schema: dict[str, Any], payload: dict[str, Any], topic: str) -> None:
@@ -245,7 +218,7 @@ class KafkaBroker:
         self._default_group = default_group
         self._consumer_schemas = dict(consumer_schemas or {})
         self._producer_schemas = dict(producer_schemas or {})
-        self._producer: Producer | None = None
+        self._poller: DeliveryPoller | None = None
         self._consumers: dict[tuple[str, int], Consumer] = {}
         self._pending: dict[tuple[str, int], RawMessage] = {}
         self._lock = threading.Lock()
@@ -268,20 +241,17 @@ class KafkaBroker:
         schema = self._producer_schemas.get(topic)
         if schema is not None:
             _validate_payload(schema, message.payload, topic)
-        producer = self._get_producer()
-        outcome: list[tuple[KafkaError | None, RawMessage]] = []
-        producer.produce(
+        timeout = settings.kafka_publish_timeout_seconds
+        outcome = self._get_poller().produce_and_wait(
             topic,
             value=message.to_bytes(),
             key=message.kafka_key,
             headers=message.to_headers(),
-            on_delivery=lambda err, msg: outcome.append((err, msg)),
+            timeout=timeout,
         )
-        timeout = settings.kafka_publish_timeout_seconds
-        _wait_for_delivery(producer, outcome, timeout)
-        if not outcome:
+        if outcome is None:
             raise BrokerError(f"publish to {topic!r} not confirmed within {timeout}s")
-        err, msg = outcome[0]
+        err, msg = outcome
         if err is not None:
             raise BrokerError(f"publish to {topic!r} failed: {err}")
         logger.info(
@@ -409,8 +379,8 @@ class KafkaBroker:
     def close(self) -> None:
         """Closes every consumer and flushes the producer, if either exists.
 
-        Unlike `publish()` (which polls for one specific message's own
-        outcome — see `_wait_for_delivery`), this genuinely wants the
+        Unlike `publish()` (which waits for one specific message's own
+        delivery report — see `DeliveryPoller`), this genuinely wants the
         *whole* shared queue drained, not one message's fate — `flush()`'s
         queue-wide return value is exactly the right question to ask here,
         so (unlike in `publish()`) it's kept, and actually checked: a
@@ -423,8 +393,8 @@ class KafkaBroker:
             self._pending.clear()
         for consumer in consumers:
             consumer.close()
-        if self._producer is not None:
-            remaining = self._producer.flush(settings.kafka_close_timeout_seconds)
+        if self._poller is not None:
+            remaining = self._poller.close(settings.kafka_close_timeout_seconds)
             if remaining > 0:
                 logger.warning(
                     "close: %d message(s) still undelivered after %.1fs, dropping them",
@@ -434,13 +404,14 @@ class KafkaBroker:
 
     # -- internals ----------------------------------------------------------
 
-    def _get_producer(self) -> Producer:
-        """Returns the shared Producer, creating it on first use."""
+    def _get_poller(self) -> DeliveryPoller:
+        """Returns the shared Producer's poller, creating both on first use."""
         with self._lock:
-            if self._producer is None:
+            if self._poller is None:
                 logger.debug("creating shared producer (bootstrap=%s)", self._bootstrap)
-                self._producer = Producer(_producer_config(self._bootstrap, self._producer_params))
-            return self._producer
+                producer = Producer(_producer_config(self._bootstrap, self._producer_params))
+                self._poller = DeliveryPoller(producer, "broker")
+            return self._poller
 
     def _consumer_for(self, topic: str, instance: int) -> Consumer:
         """Returns the Consumer for (topic, instance), creating it on first use.
@@ -453,6 +424,8 @@ class KafkaBroker:
             The (possibly newly created and subscribed) consumer.
         """
         key = (topic, instance)
+        if key not in self._consumers:
+            ensure_topic(self._bootstrap, topic)
         with self._lock:
             consumer = self._consumers.get(key)
             if consumer is None:

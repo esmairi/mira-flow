@@ -25,6 +25,7 @@ config file added or changed on disk needs a restart to show up.
 | GET | `/ready` | Readiness — DB reachable (503 otherwise) |
 | GET | `/workflows` | Every configured workflow (from JSON, not the ledger — shows up even with zero runs) |
 | GET | `/workflows/{name}` | One workflow's jobs, topics, retry policy |
+| GET | `/workflows/{name}/grid` | One page of runs (`?limit=`/`?offset=`, newest first) with each task's latest attempt, plus `has_more` — a whole grid view in one request |
 | POST | `/workflows/{name}/trigger` | Start a new run — `{"idempotency_key": ..., "input": {...}}`; 409 if no `entry_consumer` |
 | GET | `/runs` | workflow_runs, filterable by `?workflow_name=`/`?status=`, paginated (`?limit=`/`?offset=`) |
 | GET | `/runs/{run_id}` | One run, with its full input/output/error |

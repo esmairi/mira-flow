@@ -285,6 +285,7 @@ def load_workflows(directory: str | Path) -> list[WorkflowConfig]:
     if not directory.is_dir():
         raise ConfigError(f"workflows directory not found: {directory}")
     configs = [parse_workflow_file(path) for path in sorted(directory.glob("*.json"))]
+    print("#########", configs, directory)
     _check_cross_file_consumers(configs)
     return configs
 

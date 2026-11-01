@@ -14,6 +14,7 @@ first.
 | [`external-trigger/`](external-trigger) | A workflow with no `entry_consumer` — started by an external publisher, not `mira-flow trigger` |
 | [`parallel-instances/`](parallel-instances) | `instances: 3` on a consumer — multiple JobWorker threads sharing one consumer group |
 | [`retries/`](retries) | `retries` + `retry_delay_seconds` — a handler that fails a few times before succeeding |
+| [`order-fulfillment/`](order-fulfillment) | **Multi-job scenario** — 8 jobs: validation with early rejection, fraud scoring branching to a manual review, branches merging back (2 producers → 1 topic), payment with retries, express/standard shipping split, two terminal notifications. Best watched in the UI's grid/graph |
 
 ## Running a case
 
@@ -42,6 +43,7 @@ values so repeat runs need no flags:
 | `external-trigger/trigger.py [--payload JSON]` | A random signup-style event — this is the *only* way to start this workflow (no `entry_consumer`) |
 | `parallel-instances/trigger.py [--count N]` | `N` (default 10) tasks with random `task_id`s, to watch the 3 instances split the work |
 | `retries/trigger.py` | One task, to watch `flaky_handler` fail twice then succeed on attempt 3 |
+| `order-fulfillment/trigger.py [scenario\|all] [--count N] [--print]` | One order per scenario (default: all 7) — `standard`, `express`, `review-approved`, `review-rejected`, `invalid`, `flaky` (payment auto-retried), `outage` (payment FAILED → use **Retry** in the UI); `--print` just prints payloads to paste into the UI's Trigger dialog |
 
 Every script also accepts `--bootstrap-servers` to override
 `KAFKA_BOOTSTRAP_SERVERS` (e.g. `--bootstrap-servers kafka:19092` when

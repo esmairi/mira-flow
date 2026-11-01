@@ -16,6 +16,7 @@ from fastavro.validation import ValidationError as AvroValidationError
 
 from mira_flow.core.errors import CoreBrokerError
 from mira_flow.settings import settings
+from mira_flow.transport.kafka_support import ensure_topic
 from mira_flow.transport.message import Message
 
 logger = logging.getLogger(__name__)
@@ -115,6 +116,7 @@ class TopicConsumer:
         self.name = name or topic
         self._avro_schema = avro_schema
         bootstrap = _bootstrap(bootstrap_servers)
+        ensure_topic(bootstrap, topic)
         self._consumer = Consumer(_consumer_config(bootstrap, group, params))
         self._consumer.subscribe([topic], on_assign=self._on_assign)
         self._pending = None

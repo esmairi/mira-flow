@@ -8,7 +8,6 @@ multiplexed broker object — see core/README.md.
 from __future__ import annotations
 
 import logging
-import time
 from typing import Any
 
 import fastavro
@@ -17,6 +16,7 @@ from fastavro.validation import ValidationError as AvroValidationError
 
 from mira_flow.core.errors import CoreBrokerError
 from mira_flow.settings import settings
+from mira_flow.transport.kafka_support import DeliveryPoller
 from mira_flow.transport.message import Message
 
 logger = logging.getLogger(__name__)
@@ -35,32 +35,6 @@ def _producer_config(bootstrap: str, params: dict[str, Any] | None) -> dict[str,
     config.setdefault("acks", "all")
     config.setdefault("enable.idempotence", True)
     return config
-
-
-def _wait_for_delivery(producer: Producer, outcome: list[Any], timeout: float) -> None:
-    """Polls until this message's `on_delivery` callback fires, or timeout.
-
-    Deliberately doesn't just call `Producer.flush(timeout)` — that blocks
-    until the *entire* shared queue drains (`len() == 0`), not until this
-    one message's callback fires. `TopicProducer` can be shared across a
-    job's concurrent consumer instances (see `core.manager`'s
-    `_build_producers`), so `flush()` alone could block this call for the
-    full timeout on a slow *unrelated* in-flight message from another
-    caller, even though this message was already acked. Polling and
-    checking `outcome` directly bounds the wait to exactly this message.
-
-    Args:
-        producer: The Producer to poll.
-        outcome: The list this message's `on_delivery` callback appends to;
-            polling stops as soon as it's non-empty.
-        timeout: Max seconds to wait.
-    """
-    deadline = time.monotonic() + timeout
-    while not outcome:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            return
-        producer.poll(remaining)
 
 
 def _validate_payload(schema: dict[str, Any], payload: dict[str, Any], topic: str) -> None:
@@ -112,7 +86,7 @@ class TopicProducer:
         self.name = name or topic
         self._avro_schema = avro_schema
         bootstrap = _bootstrap(bootstrap_servers)
-        self._producer = Producer(_producer_config(bootstrap, params))
+        self._poller = DeliveryPoller(Producer(_producer_config(bootstrap, params)), self.name)
 
     def publish(self, message: Message) -> None:
         """Publishes a message and blocks until delivery is confirmed.
@@ -129,19 +103,17 @@ class TopicProducer:
         """
         if self._avro_schema is not None:
             _validate_payload(self._avro_schema, message.payload, self.topic)
-        outcome: list[tuple[object, Any]] = []
-        self._producer.produce(
+        timeout = settings.kafka_publish_timeout_seconds
+        outcome = self._poller.produce_and_wait(
             self.topic,
             value=message.to_bytes(),
             key=message.kafka_key,
             headers=message.to_headers(),
-            on_delivery=lambda err, msg: outcome.append((err, msg)),
+            timeout=timeout,
         )
-        timeout = settings.kafka_publish_timeout_seconds
-        _wait_for_delivery(self._producer, outcome, timeout)
-        if not outcome:
+        if outcome is None:
             raise CoreBrokerError(f"publish to {self.topic!r} not confirmed within {timeout}s")
-        err, msg = outcome[0]
+        err, msg = outcome
         if err is not None:
             raise CoreBrokerError(f"publish to {self.topic!r} failed: {err}")
         logger.info(
@@ -156,15 +128,15 @@ class TopicProducer:
     def close(self) -> None:
         """Flushes any outstanding messages before shutdown.
 
-        Unlike `publish()` (which polls for one specific message's own
-        outcome — see `_wait_for_delivery`), `close()` genuinely wants the
+        Unlike `publish()` (which waits for one specific message's own
+        delivery report — see `DeliveryPoller`), `close()` genuinely wants the
         *whole* shared queue drained, not one message's fate — `flush()`'s
         queue-wide return value is exactly the right question to ask here,
         so (unlike in `publish()`) it's kept, and actually checked: a
         nonzero return means some messages were still undelivered when the
         timeout elapsed and are about to be silently dropped.
         """
-        remaining = self._producer.flush(settings.kafka_close_timeout_seconds)
+        remaining = self._poller.close(settings.kafka_close_timeout_seconds)
         if remaining > 0:
             logger.warning(
                 "close: %d message(s) on %s still undelivered after %.1fs, dropping them",

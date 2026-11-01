@@ -38,11 +38,11 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       # Dev convenience: the broker itself creates a topic on first
-      # produce/consume instead of erroring — mira-flow's own code never
-      # calls AdminClient to create topics, this is the broker's setting,
-      # not the app's. A real cluster typically disables this for topic
-      # governance; set explicitly here since Kafka's own default has
-      # varied across versions.
+      # produce instead of erroring. (mira-flow consumers also create their
+      # own topic before subscribing — KAFKA_CREATE_MISSING_TOPICS, default
+      # true — so they never sit on a topic that appears later.) A real
+      # cluster typically disables this for topic governance; set explicitly
+      # here since Kafka's own default has varied across versions.
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
 
       CLUSTER_ID: 4L6g3nShT-eMCtK--X86sw
@@ -65,6 +65,7 @@ services:
         condition: service_healthy
 
   app:
+    profiles:  ["dev"]
     build:
       context: .
       target: dev
@@ -148,6 +149,57 @@ services:
         condition: service_completed_successfully
     command: ["run", "--workflows-dir", "/workflows", "--handlers-dir", "/handlers"]
 
+  # HTTP API over the same ledger + workflow configs as `worker` (shares its
+  # ./worker-db sqlite file and workflows mount), backing `frontend` below.
+  # Built from the `dev` target, not `prod`: the prod image only installs the
+  # root package, not packages/api_server (fastapi/uvicorn) — so, like
+  # tests/e2e's runner, it syncs every workspace package on start. Its own
+  # venv volume so it never races `app`'s `uv sync` on a shared one.
+  api:
+    profiles: ["worker"]
+    build:
+      context: .
+      target: dev
+    container_name: mira-flow-api
+    working_dir: /app
+    ports:
+      - "8001:8001"
+    volumes:
+      - .:/app
+      - api-venv:/opt/venv
+      - ./examples:/workflows:ro
+      - ./worker-db:/data
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:19092
+      DATABASE_URL: sqlite:////data/mira_flow.db
+      WORKFLOWS_DIR: /workflows
+    depends_on:
+      kafka:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    entrypoint: ["sh", "-c", "uv sync --frozen --all-packages --quiet && exec \"$@\"", "--"]
+    command: ["uvicorn", "mira_flow.api_server.app:app", "--host", "0.0.0.0", "--port", "8001"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 5s
+      timeout: 5s
+      start_period: 60s
+      retries: 12
+
+  # The React UI (frontend/), built and served by nginx on http://localhost:3000,
+  # which reverse-proxies /api/* to `api` above.
+  frontend:
+    profiles: ["worker"]
+    build:
+      context: ./frontend
+    container_name: mira-flow-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      api:
+        condition: service_healthy
+
   # Same as `migrate`, against the `postgres` service instead of sqlite —
   # activate together with `docker compose --profile worker-postgres up`
   # (that also brings up `postgres` itself, since it carries this profile
@@ -184,4 +236,5 @@ services:
 
 volumes:
   venv:
+  api-venv:
   postgres-data:

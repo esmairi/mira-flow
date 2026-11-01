@@ -59,6 +59,11 @@ class Settings(BaseSettings):
             for delivery confirmation (`Producer.flush()`) before raising.
         kafka_close_timeout_seconds: How long `close()` blocks flushing any
             outstanding messages on shutdown.
+        kafka_create_missing_topics: Create a consumer's topic (broker-default
+            partitions/replication) before subscribing, if it doesn't exist
+            yet — see `transport.kafka_support.ensure_topic`. Disable where
+            topics are provisioned out of band; a refused creation is only
+            logged either way.
     """
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
@@ -74,6 +79,7 @@ class Settings(BaseSettings):
     kafka_ssl_key_password: SecretStr | None = None
     kafka_publish_timeout_seconds: float = 30.0
     kafka_close_timeout_seconds: float = 10.0
+    kafka_create_missing_topics: bool = True
 
     def kafka_auth_params(self) -> dict[str, Any]:
         """Builds the confluent-kafka client config for whatever auth is set.

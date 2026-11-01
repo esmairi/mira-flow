@@ -78,8 +78,13 @@ def test_get_workflow(client: TestClient, suffix: str) -> None:
     assert jobs["ingest"]["is_entry"] is True
     assert jobs["ingest"]["input_topic"] == f"e2e-linear-raw-{suffix}"
     assert jobs["ingest"]["producer_routes"] == ["processed-producer"]
+    assert jobs["ingest"]["output_topics"] == [f"e2e-linear-processed-{suffix}"]
     assert jobs["transform"]["is_entry"] is False
     assert jobs["transform"]["producer_routes"] == []
+    assert jobs["transform"]["output_topics"] == []
+    assert jobs["ingest"]["routes"] == [
+        {"name": "processed-producer", "topic": f"e2e-linear-processed-{suffix}", "when": None}
+    ]
 
 
 def test_get_unknown_workflow_404(client: TestClient) -> None:
@@ -149,6 +154,39 @@ def test_trigger_is_idempotent(client: TestClient) -> None:
         ("ingest", 1),
         ("transform", 1),
     ]
+
+
+def test_retrigger_of_started_run_does_not_republish(client: TestClient) -> None:
+    key = uuid.uuid4().hex
+    first = _trigger(client, LINEAR, {"text": "only once"}, key=key)
+    assert first["created"] is True and first["published"] is True
+    run_id = first["workflow_run_id"]
+    wait_for_run_status(client, run_id, {"SUCCEEDED"})
+
+    again = _trigger(client, LINEAR, {"text": "only once"}, key=key)
+    assert again["workflow_run_id"] == run_id
+    assert again["created"] is False
+    assert again["published"] is False
+    assert again["message_id"] is None
+
+
+def test_grid_returns_runs_with_latest_tasks(client: TestClient) -> None:
+    run_id = _trigger(client, LINEAR, {"text": "grid"})["workflow_run_id"]
+    wait_for_run_status(client, run_id, {"SUCCEEDED"})
+
+    response = client.get(f"/workflows/{LINEAR}/grid", params={"limit": 1})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert [r["id"] for r in body["runs"]] == [run_id]  # newest first
+    tasks = {t["task_name"]: t for t in body["runs"][0]["tasks"]}
+    assert set(tasks) == {"ingest", "transform"}
+    assert all(t["status"] == "SUCCEEDED" and t["attempt"] == 1 for t in tasks.values())
+    assert isinstance(body["has_more"], bool)
+
+
+def test_grid_unknown_workflow_404_and_validates_limit(client: TestClient) -> None:
+    assert client.get("/workflows/nope/grid").status_code == 404
+    assert client.get(f"/workflows/{LINEAR}/grid", params={"limit": 0}).status_code == 422
 
 
 def test_external_publish_creates_implicit_run(client: TestClient, external_publish) -> None:

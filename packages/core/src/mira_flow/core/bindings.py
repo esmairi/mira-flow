@@ -122,8 +122,15 @@ def _build_binding(
         The resolved binding.
     """
     consumer_spec = consumer_by_name[job.consumer]
+    # Topics some job of *this* workflow consumes — a route to any other
+    # topic leaves the workflow (see ResolvedRoute.exits_workflow).
+    consumed_topics = {consumer_by_name[j.consumer].topic for j in config.jobs}
     output_routes = tuple(
-        ResolvedRoute(topic=producer_by_name[route.name].topic, when=route.when)
+        ResolvedRoute(
+            topic=producer_by_name[route.name].topic,
+            when=route.when,
+            exits_workflow=producer_by_name[route.name].topic not in consumed_topics,
+        )
         for route in job.producer
     )
     producer_params = {

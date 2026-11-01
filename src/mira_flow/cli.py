@@ -319,13 +319,22 @@ def trigger_command(
 
     with session_scope() as session:
         repo = WorkflowRepository(session)
-        run = repo.get_or_create_workflow_run(
+        run, created = repo.get_or_create_workflow_run(
             workflow_name=config.name,
             workflow_version=config.version,
             idempotency_key=idempotency_key,
             input=payload,
         )
-        run_id, correlation_id = run.id, run.correlation_id
+        run_id, correlation_id, status = run.id, run.correlation_id, run.status
+
+    if not created and status != "PENDING":
+        # Same rule as the API: only a still-PENDING run gets its trigger
+        # message re-published (its first publish may have failed).
+        typer.echo(
+            f"workflow_run {run_id} already exists for this idempotency key "
+            f"({status}); not re-publishing"
+        )
+        return
 
     consumer_groups = {c.topic: c.group for c in config.consumers}
     producer_spec = next((p for p in config.producers if p.topic == entry_topic), None)

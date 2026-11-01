@@ -236,28 +236,46 @@ class JobWorker:
                 raise NoMatchingRouteError(
                     f"task {binding.task_name!r}: no producer route matched output {payload!r}"
                 )
-            terminal = chosen_topic is None
-            # Record first, durably, in its own committed transaction.
-            with self._session_scope() as session:
-                repo = WorkflowRepository(session)
-                repo.succeed_task_run(task_run_id, payload, terminal=terminal)
-            if terminal:
+            if chosen_topic is None:
+                with self._session_scope() as session:
+                    WorkflowRepository(session).succeed_task_run(
+                        task_run_id, payload, terminal=True
+                    )
                 logger.debug("task %s: succeeded, terminal", binding.task_name)
-            else:
-                logger.debug("task %s: routing output to %s", binding.task_name, chosen_topic)
-                # chosen_topic is only ever set (non-None) when payload is
-                # also non-None — see the ternary above.
-                assert payload is not None
-                next_message = Message(
-                    topic=chosen_topic,
-                    payload=payload,
-                    workflow_run_id=workflow_run_id,
-                    task_run_id=task_run_id,
-                    correlation_id=correlation_id,
-                    headers=headers,
-                    key=key,
+                return
+            # chosen_topic is only ever set (non-None) when payload is
+            # also non-None — see the ternary above.
+            assert payload is not None
+            next_message = Message(
+                topic=chosen_topic,
+                payload=payload,
+                workflow_run_id=workflow_run_id,
+                task_run_id=task_run_id,
+                correlation_id=correlation_id,
+                headers=headers,
+                key=key,
+            )
+            exits = any(r.exits_workflow for r in binding.output_routes if r.topic == chosen_topic)
+            if exits:
+                # Hand-off out of the workflow: nothing in it will ever consume
+                # this topic, so this is the run's last step. Publish *before*
+                # recording, so a failed hand-off fails the task instead of
+                # leaving a SUCCEEDED run whose output never left.
+                logger.debug(
+                    "task %s: handing off to %s, terminal", binding.task_name, chosen_topic
                 )
                 self._broker.publish(chosen_topic, next_message)
+                with self._session_scope() as session:
+                    WorkflowRepository(session).succeed_task_run(
+                        task_run_id, payload, terminal=True
+                    )
+                return
+            # Record first, durably, in its own committed transaction — the
+            # next job's worker must find this task SUCCEEDED when it consumes.
+            with self._session_scope() as session:
+                WorkflowRepository(session).succeed_task_run(task_run_id, payload, terminal=False)
+            logger.debug("task %s: routing output to %s", binding.task_name, chosen_topic)
+            self._broker.publish(chosen_topic, next_message)
         except Exception as exc:  # noqa: BLE001 - record, routing, or publish failure — not retried
             with self._session_scope() as session:
                 repo = WorkflowRepository(session)

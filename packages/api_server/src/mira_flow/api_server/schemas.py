@@ -10,6 +10,24 @@ from pydantic import BaseModel, ConfigDict, Field
 from mira_flow.wiring import ConsumerSpec, WorkflowConfig
 
 
+class RouteSummary(BaseModel):
+    """One of a job's output routes, in priority order.
+
+    Attributes:
+        name: The producer name (`producers[].name`).
+        topic: That producer's Kafka topic.
+        when: The route's condition as declared in the config
+            (`{"field","op","value"}` / `{"all": [...]}` / `{"any": [...]}`);
+            None means it always matches.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    topic: str
+    when: dict[str, Any] | None
+
+
 class JobSummary(BaseModel):
     """One job within a workflow, as declared in its config.
 
@@ -20,6 +38,10 @@ class JobSummary(BaseModel):
         input_topic: That consumer's Kafka topic.
         producer_routes: The producer names its output may route to; empty
             means terminal.
+        output_topics: The Kafka topics of those producers, in the same
+            order — lets a UI link jobs into a graph by topic.
+        routes: The same routes with their topic and `when` condition, in
+            the order they're tried (first match wins).
         retries: Max retry attempts on handler failure.
         retry_delay_seconds: Delay between retry attempts.
         is_entry: Whether this job is the workflow's `entry_consumer`.
@@ -32,6 +54,8 @@ class JobSummary(BaseModel):
     consumer: str
     input_topic: str
     producer_routes: tuple[str, ...]
+    output_topics: tuple[str, ...] = ()
+    routes: tuple[RouteSummary, ...] = ()
     retries: int
     retry_delay_seconds: float
     is_entry: bool
@@ -65,6 +89,7 @@ def workflow_summary(config: WorkflowConfig) -> WorkflowSummary:
         The API-facing summary.
     """
     consumer_by_name: dict[str, ConsumerSpec] = {c.name: c for c in config.consumers}
+    producer_topic: dict[str, str] = {p.name: p.topic for p in config.producers}
     jobs = tuple(
         JobSummary(
             name=job.name,
@@ -72,6 +97,15 @@ def workflow_summary(config: WorkflowConfig) -> WorkflowSummary:
             consumer=job.consumer,
             input_topic=consumer_by_name[job.consumer].topic,
             producer_routes=tuple(route.name for route in job.producer),
+            output_topics=tuple(producer_topic[route.name] for route in job.producer),
+            routes=tuple(
+                RouteSummary(
+                    name=route.name,
+                    topic=producer_topic[route.name],
+                    when=route.when.model_dump(mode="json") if route.when else None,
+                )
+                for route in job.producer
+            ),
             retries=job.retries,
             retry_delay_seconds=job.retry_delay_seconds,
             is_entry=(job.consumer == config.entry_consumer),
@@ -174,6 +208,29 @@ class TaskRunDetail(TaskRunSummary):
     error: dict[str, Any] | None
 
 
+class GridRun(WorkflowRunSummary):
+    """One run in a grid page, with each task's latest attempt.
+
+    Attributes:
+        tasks: The latest attempt of every task that has started in this
+            run (tasks never reached aren't listed).
+    """
+
+    tasks: list[TaskRunSummary]
+
+
+class GridResponse(BaseModel):
+    """One page of a workflow's grid: runs × tasks, in a single response.
+
+    Attributes:
+        runs: The page's runs, newest `created_at` first.
+        has_more: Whether older runs exist beyond this page.
+    """
+
+    runs: list[GridRun]
+    has_more: bool
+
+
 class RetryResponse(BaseModel):
     """The result of a successful retry request.
 
@@ -214,8 +271,15 @@ class TriggerResponse(BaseModel):
         workflow_run_id: The new (or, for a repeated idempotency_key,
             pre-existing) run.
         correlation_id: The run's correlation ID.
-        topic: The Kafka topic the trigger message was published to.
-        message_id: The published message's ID.
+        topic: The workflow's entry topic.
+        message_id: The published message's ID; None when nothing was
+            published (see `published`).
+        created: Whether this request created the run (False for a
+            repeated idempotency_key).
+        published: Whether a trigger message was published. A repeated key
+            only re-publishes while the run is still PENDING — no task has
+            started, so the first message may never have gone out; once the
+            run is RUNNING or finished, re-publishing would only replay it.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -223,4 +287,6 @@ class TriggerResponse(BaseModel):
     workflow_run_id: str
     correlation_id: str | None
     topic: str
-    message_id: str
+    message_id: str | None
+    created: bool
+    published: bool

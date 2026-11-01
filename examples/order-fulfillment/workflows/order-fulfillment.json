@@ -1,0 +1,96 @@
+{
+  "name": "example_order_fulfillment",
+  "version": 1,
+  "entry_consumer": "received-consumer",
+  "consumers": [
+    { "name": "received-consumer", "topic": "ex-order-received" },
+    { "name": "fraud-consumer", "topic": "ex-order-fraud-check" },
+    { "name": "review-consumer", "topic": "ex-order-review" },
+    { "name": "payment-consumer", "topic": "ex-order-payment" },
+    { "name": "ship-standard-consumer", "topic": "ex-order-ship-standard" },
+    { "name": "ship-express-consumer", "topic": "ex-order-ship-express" },
+    { "name": "notify-consumer", "topic": "ex-order-notify" },
+    { "name": "rejected-consumer", "topic": "ex-order-rejected" }
+  ],
+  "producers": [
+    { "name": "fraud-producer", "topic": "ex-order-fraud-check" },
+    { "name": "review-producer", "topic": "ex-order-review" },
+    { "name": "payment-producer", "topic": "ex-order-payment" },
+    { "name": "ship-standard-producer", "topic": "ex-order-ship-standard" },
+    { "name": "ship-express-producer", "topic": "ex-order-ship-express" },
+    { "name": "notify-producer", "topic": "ex-order-notify" },
+    { "name": "rejected-producer", "topic": "ex-order-rejected" }
+  ],
+  "jobs": [
+    {
+      "name": "receive_order",
+      "handler": "order_receive_handler",
+      "consumer": "received-consumer",
+      "producer": [
+        { "name": "rejected-producer", "when": { "field": "valid", "op": "eq", "value": false } },
+        { "name": "fraud-producer" }
+      ],
+      "params": { "work_seconds": 0.5 }
+    },
+    {
+      "name": "fraud_check",
+      "handler": "order_fraud_check_handler",
+      "consumer": "fraud-consumer",
+      "producer": [
+        { "name": "review-producer", "when": { "field": "risk_score", "op": "gte", "value": 80 } },
+        { "name": "payment-producer" }
+      ],
+      "params": { "work_seconds": 1.0, "high_value_threshold": 1000 }
+    },
+    {
+      "name": "manual_review",
+      "handler": "order_manual_review_handler",
+      "consumer": "review-consumer",
+      "producer": [
+        { "name": "payment-producer", "when": { "field": "approved", "op": "eq", "value": true } },
+        { "name": "rejected-producer" }
+      ],
+      "params": { "work_seconds": 2.0, "max_auto_approve_total": 5000 }
+    },
+    {
+      "name": "charge_payment",
+      "handler": "order_charge_payment_handler",
+      "consumer": "payment-consumer",
+      "producer": [
+        { "name": "ship-express-producer", "when": { "field": "shipping", "op": "eq", "value": "express" } },
+        { "name": "ship-standard-producer" }
+      ],
+      "params": { "work_seconds": 1.0 },
+      "retries": 2,
+      "retry_delay_seconds": 2
+    },
+    {
+      "name": "ship_standard",
+      "handler": "order_ship_standard_handler",
+      "consumer": "ship-standard-consumer",
+      "producer": "notify-producer",
+      "params": { "work_seconds": 1.5, "carrier": "colissimo", "eta_days": 4 }
+    },
+    {
+      "name": "ship_express",
+      "handler": "order_ship_express_handler",
+      "consumer": "ship-express-consumer",
+      "producer": "notify-producer",
+      "params": { "work_seconds": 0.5, "carrier": "chronopost", "eta_days": 1 }
+    },
+    {
+      "name": "notify_customer",
+      "handler": "order_notify_customer_handler",
+      "consumer": "notify-consumer",
+      "producer": null,
+      "params": { "work_seconds": 0.3 }
+    },
+    {
+      "name": "notify_rejection",
+      "handler": "order_notify_rejection_handler",
+      "consumer": "rejected-consumer",
+      "producer": null,
+      "params": { "work_seconds": 0.3 }
+    }
+  ]
+}

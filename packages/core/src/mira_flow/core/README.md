@@ -37,10 +37,16 @@ before regardless of which physical distribution they live in.
   `core` favors one small object per job over one shared broker object. The
   one thing they *do* share is `errors.py`'s `CoreBrokerError`, so callers
   can catch a single exception type regardless of which side raised it.
-- Neither side creates topics — no `AdminClient` calls anywhere in `core`.
-  Topics are expected to already exist (pre-created by whoever owns the
-  Kafka cluster, or via the broker's own auto-create-topics setting if
-  that's enabled) before a `WorkflowManager` runs against them.
+- `TopicConsumer` creates its topic if it's missing, before subscribing
+  (`transport.kafka_support.ensure_topic`, broker-default partitions/
+  replication): a consumer subscribed to a not-yet-existing topic otherwise
+  only notices it on its next metadata refresh (5 min by default), leaving
+  downstream jobs idle. Best effort — a refused creation is just logged;
+  set `KAFKA_CREATE_MISSING_TOPICS=false` where topics are provisioned out
+  of band.
+- Each `TopicProducer` waits for its own delivery report via
+  `transport.kafka_support.DeliveryPoller` (one polling thread per
+  Producer), never by polling the Producer itself — see its docstring.
 - **`job_worker.py`** — `JobWorker` implements `execution.Worker`
   (`handle_one`/`run`/`stop`) — the shape both `core` and `orchestrator`'s
   execution units share, even though the loop bodies aren't literally shared

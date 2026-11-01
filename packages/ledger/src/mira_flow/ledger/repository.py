@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any, cast
 
 from sqlalchemy import select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 
 from mira_flow.ledger.models import TaskRun, WorkflowRun
 
@@ -60,7 +61,7 @@ class WorkflowRepository:
         workflow_version: int,
         idempotency_key: str,
         input: dict[str, Any],
-    ) -> WorkflowRun:
+    ) -> tuple[WorkflowRun, bool]:
         """Returns the existing run for `idempotency_key`, or creates one.
 
         Safe under concurrent callers: if two callers race to create the
@@ -76,7 +77,10 @@ class WorkflowRepository:
             input: The trigger payload.
 
         Returns:
-            The new or pre-existing PENDING run.
+            The run, and whether this call created it (False when it already
+            existed — including losing a concurrent create race). Callers use
+            the flag to avoid re-publishing the trigger message for a run
+            that's already under way.
         """
         existing = self._session.scalar(
             select(WorkflowRun).where(WorkflowRun.idempotency_key == idempotency_key)
@@ -87,7 +91,7 @@ class WorkflowRepository:
                 existing.id,
                 idempotency_key,
             )
-            return existing
+            return existing, False
 
         now = _now()
         run = WorkflowRun(
@@ -116,9 +120,9 @@ class WorkflowRepository:
                 idempotency_key,
                 existing.id,
             )
-            return existing
+            return existing, False
         logger.debug("workflow_run: created run %s (workflow=%r)", run.id, workflow_name)
-        return run
+        return run, True
 
     # -- consume path (§4b, §5) ----------------------------------------------
 
@@ -536,6 +540,34 @@ class WorkflowRepository:
             .order_by(TaskRun.task_name, TaskRun.attempt)
         )
         return list(self._session.scalars(stmt))
+
+    def list_latest_task_runs(self, workflow_run_ids: Sequence[str]) -> list[TaskRun]:
+        """Lists the latest attempt of every task, across several runs at once.
+
+        One query for a whole page of runs (vs. one `list_task_runs` per
+        run) — for grid-style views. Payload columns (input/output/error)
+        are deferred: summaries don't need them, and they can be large.
+
+        Args:
+            workflow_run_ids: The runs to cover.
+
+        Returns:
+            One attempt per (run, task) — the highest-numbered — ordered by
+            run ID then task name.
+        """
+        if not workflow_run_ids:
+            return []
+        stmt = (
+            select(TaskRun)
+            .where(TaskRun.workflow_run_id.in_(list(workflow_run_ids)))
+            .options(defer(TaskRun.input), defer(TaskRun.output), defer(TaskRun.error))
+            .order_by(TaskRun.workflow_run_id, TaskRun.task_name, TaskRun.attempt)
+        )
+        latest: dict[tuple[str, str], TaskRun] = {}
+        for task_run in self._session.scalars(stmt):
+            # Ordered by attempt, so the last one seen per key is the latest.
+            latest[(task_run.workflow_run_id, task_run.task_name)] = task_run
+        return list(latest.values())
 
     def get_task_run(self, task_run_id: str) -> TaskRun | None:
         """Gets one task_run by ID.

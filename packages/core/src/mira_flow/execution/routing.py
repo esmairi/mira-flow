@@ -30,12 +30,23 @@ class NoMatchingRouteError(Exception):
 class ResolvedRoute(BaseModel):
     """A job's ProducerRoute with its producer `name` resolved to an actual
     Kafka topic — everything downstream of config-loading (both
-    `orchestrator` and `core`) operates on topics, never names."""
+    `orchestrator` and `core`) operates on topics, never names.
+
+    Attributes:
+        topic: The Kafka topic this route publishes to.
+        when: The condition selecting this route; None always matches.
+        exits_workflow: No job in this route's own workflow consumes
+            `topic` — the message is handed to something outside the
+            workflow (another workflow, an external service). Taking such a
+            route still publishes, but ends the run: there's no next job to
+            wait for.
+    """
 
     model_config = ConfigDict(frozen=True)
 
     topic: str
     when: Condition | None
+    exits_workflow: bool = False
 
 
 def select_route(routes: tuple[ResolvedRoute, ...], payload: dict[str, Any]) -> str | None:
